@@ -111,7 +111,26 @@ func runInit(c *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	if err := gitutil.Run(dir, "add", "docker-compose.yml", ".gitignore"); err != nil {
+
+	if gitutil.LFSInstalled() {
+		if err := gitutil.LFSInstall(dir); err != nil {
+			fmt.Printf("Warning: `git lfs install` failed: %v\n", err)
+		} else if err := gitutil.LFSTrack(dir, scaffold.ModsLFSPattern); err != nil {
+			fmt.Printf("Warning: `git lfs track` failed: %v\n", err)
+		} else {
+			fmt.Printf("Mod jars under data/mods will be tracked via Git LFS (%s)\n", scaffold.ModsLFSPattern)
+		}
+	} else {
+		fmt.Printf("Note: git-lfs isn't installed, so mod jars placed in data/mods will be tracked as regular "+
+			"(non-LFS) git objects. This works but can bloat the repo for large/frequently-updated jars. "+
+			"Install git-lfs (https://git-lfs.com) and run `git lfs track \"%s\"` later to switch.\n", scaffold.ModsLFSPattern)
+	}
+
+	addArgs := []string{"add", "docker-compose.yml", ".gitignore"}
+	if _, err := os.Stat(filepath.Join(dir, ".gitattributes")); err == nil {
+		addArgs = append(addArgs, ".gitattributes")
+	}
+	if err := gitutil.Run(dir, addArgs...); err != nil {
 		return err
 	}
 	changed, err := gitutil.HasStagedChanges(dir)

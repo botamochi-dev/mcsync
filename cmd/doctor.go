@@ -31,6 +31,11 @@ func runDoctor(c *cobra.Command, args []string) error {
 		{"docker installed", dockerutil.IsInstalled(), "install Docker Desktop: https://www.docker.com/products/docker-desktop/"},
 	}
 
+	if checks[0].ok {
+		checks = append(checks,
+			check{"git-lfs installed", gitutil.LFSInstalled(), "install git-lfs (used to sync mod jars in data/mods): https://git-lfs.com"},
+		)
+	}
 	if checks[1].ok {
 		checks = append(checks,
 			check{"docker daemon running", dockerutil.DaemonRunning(), "start Docker Desktop and wait for it to finish starting"},

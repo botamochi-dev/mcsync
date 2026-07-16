@@ -34,6 +34,11 @@ func runSetup(c *cobra.Command, args []string) error {
 	if !gitutil.IsInstalled() {
 		return fmt.Errorf("git is not installed; run `mcsync doctor` for details")
 	}
+	if !gitutil.LFSInstalled() {
+		return fmt.Errorf("git-lfs is not installed; mcsync projects track mod jars (data/mods) with it, " +
+			"and without it they'd silently clone as empty placeholder files. " +
+			"Install it from https://git-lfs.com and try again")
+	}
 	if !dockerutil.IsInstalled() {
 		return fmt.Errorf("docker is not installed; run `mcsync doctor` for details")
 	}
@@ -42,6 +47,14 @@ func runSetup(c *cobra.Command, args []string) error {
 	}
 	if !dockerutil.ComposeInstalled() {
 		return fmt.Errorf("`docker compose` plugin isn't available; run `mcsync doctor` for details")
+	}
+
+	// Make sure git-lfs's filters are registered even if `git lfs install`
+	// was never run on this PC before -- otherwise the clone below would
+	// silently leave mod jars as tiny LFS pointer files instead of the
+	// real content.
+	if err := gitutil.LFSInstall("."); err != nil {
+		return fmt.Errorf("`git lfs install` failed: %w", err)
 	}
 
 	fmt.Printf("Cloning %s into %s...\n", repoURL, dir)

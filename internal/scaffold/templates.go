@@ -39,6 +39,11 @@ services:
     tty: true
 `))
 
+// ModsLFSPattern is the git-lfs tracking pattern applied to a fresh
+// project during `init`, so mod jars placed in data/mods don't bloat
+// plain git history as they're added or updated.
+const ModsLFSPattern = "data/mods/**/*.jar"
+
 // RenderCompose renders the docker-compose.yml content for a new project.
 func RenderCompose(data ComposeData) (string, error) {
 	var buf bytes.Buffer
@@ -66,9 +71,11 @@ func SanitizeProjectName(name string) string {
 
 // Gitignore is the .gitignore content for a fresh project. It follows the
 // itzg/docker-minecraft-server data/ layout: only durable player-facing
-// state (world, config, server.properties, ops/whitelist) is tracked.
-// Everything itzg regenerates on its own (mods, libraries, logs, eula.txt)
-// is ignored.
+// state is tracked -- world, config, server.properties, ops/whitelist, and
+// mods (mod jars you place directly in data/mods; tracked via Git LFS, see
+// ModsLFSPattern, so large binaries don't bloat plain git history).
+// Everything itzg regenerates on its own (Forge/library jars, logs,
+// eula.txt) is ignored.
 const Gitignore = `data/*
 !data/world/
 !data/world/**
@@ -77,7 +84,8 @@ const Gitignore = `data/*
 !data/server.properties
 !data/ops.json
 !data/whitelist.json
-data/mods/
+!data/mods/
+!data/mods/**
 data/libraries/
 data/logs/
 data/cache/

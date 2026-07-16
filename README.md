@@ -34,6 +34,17 @@ Docker Desktopを起動していないと`docker`コマンドは「デーモン�
 
 さらに、複数PC間で同期するには**GitHubなどのリモートリポジトリ**が必要です(GitHubで空のリポジトリを1つ作成し、そのURLを`mcsync init`実行時に渡します)。
 
+### Git LFS
+
+mod jarファイル(`data/mods`)を直接git管理するために使います。数十MB単位になりがちなjarを普通のgitでそのまま管理すると、更新するたびに古いバージョンも含めてリポジトリがどんどん肥大化してしまうため、大きいバイナリを差分管理できるGit LFSという拡張を使います。
+
+1. https://git-lfs.com からインストール(またはwinget: `winget install GitHub.GitLFS`)
+2. 確認: ターミナルで `git lfs version` が通ればOK
+
+`mcsync init`/`mcsync setup`が、その都度必要な設定(`git lfs install`)を自動でやってくれるので、インストールさえしておけば手動操作は不要です。**インストールを忘れると**、`mcsync setup`で他のPCのプロジェクトをcloneした時に、mod jarが中身の入っていない小さなプレースホルダーファイルのまま(＝実際にはダウンロードされない)になってしまうので注意してください。`mcsync doctor`で確認できます。
+
+**参考:** GitHubのLFSストレージ/帯域は無料枠だと1GBまでです(超えると追加購入が必要)。個人・友人内の利用規模であれば通常は問題になりませんが、大きいmodを大量に入れ替えるような使い方をする場合は、GitHub側の[Git LFSの料金体系](https://docs.github.com/repositories/working-with-files/managing-large-files/about-storage-and-bandwidth-usage)を一度確認しておくと安心です。
+
 ## 2. mcsyncのインストール
 
 mcsyncはGo製のシングルバイナリです。このリポジトリ(`mcsync`フォルダ)自体をビルドして使います。
@@ -98,6 +109,7 @@ mcsync doctor
 ```
 ✅ git installed
 ✅ docker installed
+✅ git-lfs installed
 ❌ docker daemon running
    -> start Docker Desktop and wait for it to finish starting
 ✅ docker compose available
@@ -182,6 +194,30 @@ mcsync.exe start
 
 バラのスラッグ(URLでなく`jei`のような文字列)を渡した場合はデフォルトでModrinth扱いになります。CurseForgeのスラッグを渡したい場合は `--type curseforge` を付けてください。
 
+### Modrinth/CurseForgeに無いmod(自作・個人配布のjar)を追加する
+
+ModrinthにもCurseForgeにも無いmod(自作のもの、知人から直接もらったjarなど)は`mods add`では追加できません。その場合は、**`data/mods`フォルダにjarファイルをそのまま置いてください。**
+
+```
+my-server/
+  docker-compose.yml
+  data/
+    mods/              <- ここに直接jarを置く
+      my-custom-mod.jar
+```
+
+`data`フォルダは基本的に.gitignoreの対象(下記参照)ですが、`data/mods`だけは例外的に**git管理対象**になっており、かつ`.gitattributes`により**Git LFS**で追跡されます(`init`で新規作成したプロジェクトには最初から設定済みです)。ファイルを置いたら:
+
+```
+mcsync.exe stop
+```
+
+を実行すれば(サーバーを止める・止めないに関わらず、変更があれば)自動でcommit・pushされ、他のPCで`mcsync start`すればそのmodも一緒に反映されます。Git LFSのおかげで、jarを更新してもリポジトリの履歴が更新差分だけで済み、素のgitで管理するより肥大化しにくくなっています。
+
+**注意:**
+- Git LFSが入っていないPCで`mcsync setup`すると、jarが中身の無いプレースホルダーのままになります(`mcsync doctor`で事前確認してください)。
+- `MODRINTH_PROJECTS`/`CURSEFORGE_FILES`経由でダウンロードされるmod(`mcsync mods add`で追加したもの)も同じ`data/mods`フォルダに入りますが、これらは`docker-compose.yml`の記述から再現できるので、二重にgit管理されるとリポジトリが無駄に膨らみます。基本的にはどちらか一方の方法(URL経由 or 手動配置)にmodごとに統一するのがおすすめです。
+
 ### `mcsync start`
 
 遊ぶ前に実行します。
@@ -260,7 +296,7 @@ services:
 
 このファイルこそが「サーバーの設計図」です。MC/Forgeバージョンやmod一覧を変えたい時は、このファイルの内容(または`mcsync mods add`)を変えてcommitすれば、他のPCでも`mcsync start`するだけで同じ状態が再現されます。手でこのファイルを直接編集しても構いませんが、mod一覧の追記は書式ミスを避けるため`mcsync mods add`の利用を推奨します。
 
-サーバーの全データ(ワールド、mod jar、ログなど)は `./data` フォルダ以下にDockerが作ります。このフォルダは.gitignoreで「必要なものだけ追跡」する設定になっています(下記参照)。
+サーバーの全データ(ワールド、mod jar、ログなど)は `./data` フォルダ以下にDockerが作ります。このフォルダは.gitignoreで「必要なものだけ追跡」する設定になっています(下記参照)。`data/mods`だけは例外的にGit LFS経由で追跡され、自作・個人配布のmodを直接置く場所として使えます(詳細は上の「Modrinth/CurseForgeに無いmodを追加する」を参照)。
 
 ## 6. .gitignore の考え方
 
@@ -273,7 +309,8 @@ data/*
 !data/server.properties
 !data/ops.json
 !data/whitelist.json
-data/mods/
+!data/mods/
+!data/mods/**
 data/libraries/
 data/logs/
 data/cache/
@@ -281,8 +318,8 @@ data/eula.txt
 data/*.log
 ```
 
-- **追跡する(gitで同期する)**: `data/world`(ワールドデータ本体)、`data/config`(mod設定)、`server.properties`、`ops.json`、`whitelist.json` — これらは「プレイヤーの進行状況」そのものなので同期が必要
-- **追跡しない**: mod jar・ライブラリ・ログ・`eula.txt` — これらは`docker-compose.yml`の内容とitzgイメージから**毎回自動的に再生成される**ので、gitで運ぶ必要がありません。むしろmod jarのような大きいバイナリをgitに入れないことで、リポジトリを軽く保てます。
+- **追跡する(gitで同期する)**: `data/world`(ワールドデータ本体)、`data/config`(mod設定)、`server.properties`、`ops.json`、`whitelist.json`、`data/mods`(mod jar、Git LFS経由) — これらは「プレイヤーの進行状況」や「使っているmod」そのものなので同期が必要
+- **追跡しない**: Forge本体・ライブラリ・ログ・`eula.txt` — これらは`docker-compose.yml`の内容とitzgイメージから**毎回自動的に再生成される**ので、gitで運ぶ必要がありません。
 
 ## 7. トラブルシューティング
 
@@ -292,6 +329,7 @@ data/*.log
 | `mcsync start`が`git pull`でコンフリクトエラー | 別PCで`stop`せずに終了した、または2台で同時に起動していた可能性。`git status`で状態を確認し、必要ならどちらのワールドを残すか手動で判断してマージ |
 | `mods add`で「docker-compose.ymlが見つからない」 | プロジェクトのルートフォルダ(docker-compose.ymlがある場所)で実行しているか確認 |
 | 初回`start`後、サーバーに繋がらない | Forge本体のダウンロード・インストール中の可能性。`docker compose logs -f mc`でログを見て`Done`が出るまで待つ |
+| `data/mods`のjarが数百バイトしかない/サーバーがmodエラーで落ちる | Git LFSが未インストールのままcloneした可能性。`git lfs install`してから`git lfs pull`でLFSの実体を取得し直す(以後は`mcsync doctor`で事前確認を) |
 | ルーター越しに友人を招待したい | mcsyncの範囲外です。ルーターのポートフォワーディング(25565/TCP)や、Tailscale等のVPNを別途設定してください |
 
 困ったら、まず `mcsync doctor` を実行してください。

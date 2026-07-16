@@ -97,3 +97,23 @@ func CurrentBranch(dir string) string {
 	}
 	return out
 }
+
+// LFSInstalled reports whether the git-lfs extension is available. mcsync
+// tracks large mod jars (data/mods) with Git LFS so a plain-git repo
+// doesn't balloon every time a mod is added or updated.
+func LFSInstalled() bool {
+	_, err := Output("", "lfs", "version")
+	return err == nil
+}
+
+// LFSInstall registers git-lfs's filters for dir's repo. Idempotent --
+// safe to call on every init/setup even if already installed.
+func LFSInstall(dir string) error {
+	return Run(dir, "lfs", "install")
+}
+
+// LFSTrack runs `git lfs track <pattern>` in dir, creating or updating
+// .gitattributes accordingly.
+func LFSTrack(dir, pattern string) error {
+	return Run(dir, "lfs", "track", pattern)
+}

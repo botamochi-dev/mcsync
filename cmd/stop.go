@@ -14,7 +14,7 @@ import (
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the server, then commit and push world/config changes",
+	Short: "Stop the server, then commit and push world/config/mods changes",
 	RunE:  runStop,
 }
 
@@ -23,13 +23,15 @@ func init() {
 }
 
 // trackedStatePaths are the parts of data/ that .gitignore keeps (see
-// scaffold.Gitignore): world, config, server.properties, ops/whitelist.
+// scaffold.Gitignore): world, config, server.properties, ops/whitelist,
+// and mods (tracked via Git LFS -- see scaffold.ModsLFSPattern).
 var trackedStatePaths = []string{
 	filepath.Join("data", "world"),
 	filepath.Join("data", "config"),
 	filepath.Join("data", "server.properties"),
 	filepath.Join("data", "ops.json"),
 	filepath.Join("data", "whitelist.json"),
+	filepath.Join("data", "mods"),
 }
 
 func runStop(c *cobra.Command, args []string) error {
@@ -52,7 +54,7 @@ func runStop(c *cobra.Command, args []string) error {
 		}
 	}
 	if len(toAdd) == 0 {
-		fmt.Println("No world/config data found to save.")
+		fmt.Println("No world/config/mods data found to save.")
 		return nil
 	}
 
@@ -64,7 +66,7 @@ func runStop(c *cobra.Command, args []string) error {
 		return err
 	}
 	if !changed {
-		fmt.Println("No world/config changes since last save.")
+		fmt.Println("No world/config/mods changes since last save.")
 		return nil
 	}
 
