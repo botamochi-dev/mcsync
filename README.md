@@ -227,8 +227,9 @@ mcsync.exe start
 ```
 
 1. `git pull --ff-only`(他PCで保存された最新のワールド・設定を取り込む)
-2. `docker compose up -d`(サーバー起動)
-3. サーバーが完全に起動する(healthyになる)まで、ログを画面に流しながら待つ
+2. (リモート設定済みなら)ローカルのGit LFSキャッシュを掃除(下記参照)
+3. `docker compose up -d`(サーバー起動)
+4. サーバーが完全に起動する(healthyになる)まで、ログを画面に流しながら待つ
 
 pullでコンフリクト(マージ不能)が起きた場合はエラーで止まります。これは大抵「stopし忘れたまま別PCで遊んでしまった」ケースなので、慌てず手動でgitの状態を確認してください。
 
@@ -253,6 +254,20 @@ Forge本体とmodのダウンロード・インストールは、**そのPC・�
 
 **もっと速くする方法について:** 「Forge/modを毎回インストールし直すのではなく、セットアップ済みの状態そのものを配布する」というアイデア(Dockerイメージとして事前ビルドしてどこかに置いておき、各PCはそれをpullするだけにする)も技術的には可能です。ただしこれをやるには、mod構成を変えるたびに独自にイメージをビルドして置き場所(Docker Hub等のコンテナレジストリ)にpushし直す運用が必要になり、「Forge/modの面倒は全部itzgイメージに任せる」というmcsyncの設計方針から外れて管理対象が増えます。個人・友人内での利用では、上記の「初回だけ待てば、あとは各PCとも数十秒」という現状の方が運用はシンプルです。もし本当に必要であれば追加実装できるので、気になる場合は相談してください。
 
+#### Git LFSキャッシュの自動クリーンアップ
+
+`data/mods`のjarを何度も追加・更新していると、`.git/lfs/objects`(ローカルのLFSキャッシュ)に過去バージョンのjarが積み上がり、`.git`フォルダが数GB単位に肥大化することがあります。これを防ぐため、**`mcsync start`と`mcsync stop`は、リモートへのpull/push成功後に自動で`git lfs prune`を実行**します。
+
+```
+Cleaning up local Git LFS cache...
+prune: 2 local objects, 1 retained, done.
+prune: Deleting objects: 100% (1/1), done.
+```
+
+`git lfs prune`はgit-lfs公式のメンテナンスコマンドで、**リモートに既にpush済みと確認できたオブジェクトのうち、最近の履歴から参照されていない古いもの**だけを安全に削除します(まだリモートに無い、または直近で使われているオブジェクトは消えません)。そのため毎回自動実行しても安全です。手動で今すぐ掃除したい場合は `git lfs prune` を直接実行しても構いません。
+
+git-lfsが入っていない、またはリモートが未設定のプロジェクトではこのクリーンアップはスキップされます(失敗しても`start`/`stop`自体は止まりません)。
+
 ### `mcsync stop`
 
 遊び終わったら実行します。
@@ -262,8 +277,8 @@ mcsync.exe stop
 ```
 
 1. `docker compose down`(サーバー停止)
-2. ワールド(`data/world`)・設定(`data/config`, `server.properties`, `ops.json`, `whitelist.json`)をcommit
-3. リモートが設定されていれば`git push`
+2. ワールド(`data/world`)・設定(`data/config`, `server.properties`, `ops.json`, `whitelist.json`)・mod(`data/mods`)をcommit
+3. リモートが設定されていれば`git push`、続けてローカルのGit LFSキャッシュを自動クリーンアップ(上記参照)
 
 **遊び終わったら他のことをする前に必ずこれを実行する**のがルールです。stopし忘れると次に別PCで`start`した時に他PCの変更を取り込めず、データが古いまま上書きされる恐れがあります。
 

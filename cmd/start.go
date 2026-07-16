@@ -37,6 +37,7 @@ func runStart(c *cobra.Command, args []string) error {
 				return fmt.Errorf("%w\n(if this is a merge conflict, resolve it manually before starting the server -- "+
 					"do not start with unresolved world/config conflicts)", err)
 			}
+			pruneLFSCache(dir)
 		} else {
 			fmt.Println("No git remote configured; skipping pull.")
 		}

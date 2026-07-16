@@ -80,6 +80,7 @@ func runStop(c *cobra.Command, args []string) error {
 		if err := gitutil.Run(dir, "push"); err != nil {
 			return fmt.Errorf("%w\n(the save was committed locally; push manually once this is resolved)", err)
 		}
+		pruneLFSCache(dir)
 	} else {
 		fmt.Println("No git remote configured; saved locally only.")
 	}

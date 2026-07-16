@@ -117,3 +117,14 @@ func LFSInstall(dir string) error {
 func LFSTrack(dir, pattern string) error {
 	return Run(dir, "lfs", "track", pattern)
 }
+
+// LFSPrune deletes old local Git LFS object copies from dir's
+// .git/lfs/objects cache. git-lfs only prunes objects it has verified are
+// already on the remote and aren't referenced by recent local history, so
+// it's safe to run routinely -- nothing still-needed gets deleted. This is
+// what keeps the local LFS cache from growing unbounded as mod jars are
+// added/updated over time (each version briefly exists in the cache both
+// before and after a push).
+func LFSPrune(dir string) error {
+	return Run(dir, "lfs", "prune")
+}
