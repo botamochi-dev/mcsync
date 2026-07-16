@@ -1,0 +1,7 @@
+/mcsync.exe
+/mcsync
+/dist/
+
+# created by running `mcsync init`/`start` in this folder while testing
+/data/
+/docker-compose.yml

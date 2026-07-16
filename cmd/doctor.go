@@ -1,0 +1,59 @@
+package cmd
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"mcsync/internal/dockerutil"
+	"mcsync/internal/gitutil"
+)
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Check that git and Docker are installed and ready",
+	RunE:  runDoctor,
+}
+
+func init() {
+	rootCmd.AddCommand(doctorCmd)
+}
+
+type check struct {
+	label string
+	ok    bool
+	hint  string
+}
+
+func runDoctor(c *cobra.Command, args []string) error {
+	checks := []check{
+		{"git installed", gitutil.IsInstalled(), "install git: https://git-scm.com/downloads"},
+		{"docker installed", dockerutil.IsInstalled(), "install Docker Desktop: https://www.docker.com/products/docker-desktop/"},
+	}
+
+	if checks[1].ok {
+		checks = append(checks,
+			check{"docker daemon running", dockerutil.DaemonRunning(), "start Docker Desktop and wait for it to finish starting"},
+			check{"docker compose available", dockerutil.ComposeInstalled(), "update Docker Desktop (the compose plugin ships with it)"},
+		)
+	}
+
+	allOK := true
+	for _, ch := range checks {
+		mark := "✅"
+		if !ch.ok {
+			mark = "❌"
+			allOK = false
+		}
+		fmt.Printf("%s %s\n", mark, ch.label)
+		if !ch.ok && ch.hint != "" {
+			fmt.Printf("   -> %s\n", ch.hint)
+		}
+	}
+
+	if !allOK {
+		return fmt.Errorf("one or more checks failed")
+	}
+	fmt.Println("\nAll good.")
+	return nil
+}
