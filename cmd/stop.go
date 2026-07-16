@@ -47,11 +47,37 @@ func runStop(c *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if err := saveTrackedState(dir, false); err != nil {
+		return err
+	}
+	fmt.Println("\nDone. World/config saved.")
+	return nil
+}
+
+// saveTrackedState commits (and pushes, if a remote is configured) any
+// changes under trackedStatePaths. Shared by `stop` (server already
+// stopped) and `autosave` (server still running -- liveServer flushes the
+// world to disk via RCON first, and leaves the start lock alone since the
+// session isn't actually over).
+func saveTrackedState(dir string, liveServer bool) error {
+	if liveServer {
+		// Best-effort: make sure the world on disk is consistent before
+		// snapshotting it. Ignored if RCON isn't reachable.
+		_ = dockerutil.Compose(dir, "exec", "mc", "rcon-cli", "save-all")
+	}
+
 	var toAdd []string
 	for _, p := range trackedStatePaths {
 		if _, err := os.Stat(filepath.Join(dir, p)); err == nil {
 			toAdd = append(toAdd, p)
 		}
+	}
+	if !liveServer {
+		lockFiles, err := removeLockAndStage(dir)
+		if err != nil {
+			fmt.Printf("Warning: couldn't remove lock file: %v\n", err)
+		}
+		toAdd = append(toAdd, lockFiles...)
 	}
 	if len(toAdd) == 0 {
 		fmt.Println("No world/config/mods data found to save.")
@@ -84,7 +110,5 @@ func runStop(c *cobra.Command, args []string) error {
 	} else {
 		fmt.Println("No git remote configured; saved locally only.")
 	}
-
-	fmt.Println("\nDone. World/config saved.")
 	return nil
 }

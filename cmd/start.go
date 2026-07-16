@@ -10,7 +10,10 @@ import (
 	"mcsync/internal/gitutil"
 )
 
-var startNoWait bool
+var (
+	startNoWait bool
+	startForce  bool
+)
 
 // startupTimeout is generous because the first boot on a fresh PC downloads
 // and installs Forge plus every mod from scratch.
@@ -24,20 +27,26 @@ var startCmd = &cobra.Command{
 
 func init() {
 	startCmd.Flags().BoolVar(&startNoWait, "no-wait", false, "return immediately instead of showing startup progress")
+	startCmd.Flags().BoolVar(&startForce, "force", false, "start even if another PC's lock looks active")
 	rootCmd.AddCommand(startCmd)
 }
 
 func runStart(c *cobra.Command, args []string) error {
 	dir := "."
+	tracked := gitutil.IsInstalled() && gitutil.IsRepo(dir)
+	remoteConfigured := tracked && gitutil.HasRemote(dir, "origin")
 
-	if gitutil.IsInstalled() && gitutil.IsRepo(dir) {
-		if gitutil.HasRemote(dir, "origin") {
+	if tracked {
+		if remoteConfigured {
 			fmt.Println("Pulling latest changes...")
 			if err := gitutil.Run(dir, "pull", "--ff-only"); err != nil {
 				return fmt.Errorf("%w\n(if this is a merge conflict, resolve it manually before starting the server -- "+
 					"do not start with unresolved world/config conflicts)", err)
 			}
 			pruneLFSCache(dir)
+			if err := checkLock(dir, startForce); err != nil {
+				return err
+			}
 		} else {
 			fmt.Println("No git remote configured; skipping pull.")
 		}
@@ -50,6 +59,12 @@ func runStart(c *cobra.Command, args []string) error {
 	fmt.Println("Starting the server...")
 	if err := dockerutil.Compose(dir, "up", "-d"); err != nil {
 		return err
+	}
+
+	if remoteConfigured {
+		if err := writeLockAndCommit(dir); err != nil {
+			fmt.Printf("Warning: couldn't record start lock: %v\n", err)
+		}
 	}
 
 	if startNoWait {
