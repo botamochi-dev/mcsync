@@ -63,6 +63,32 @@ func mapAppend(m *yaml.Node, key string, value *yaml.Node) {
 	m.Content = append(m.Content, keyNode, value)
 }
 
+// mapDelete removes key (and its value) from m, if present.
+func mapDelete(m *yaml.Node, key string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+// blockListLines splits a block-scalar node's value into its non-empty,
+// trimmed lines. Returns nil if node is nil (key not present).
+func blockListLines(node *yaml.Node) []string {
+	if node == nil {
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(node.Value, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
 // environmentNode navigates services.mc.environment, creating the
 // environment mapping if the service exists but has none yet.
 func (d *Document) environmentNode() (*yaml.Node, error) {
@@ -100,23 +126,50 @@ func (d *Document) AddCurseforgeFile(slug string) (added bool, err error) {
 	return d.addToBlockList("CURSEFORGE_FILES", slug)
 }
 
+// ListModrinthProjects returns the slugs currently listed in
+// MODRINTH_PROJECTS (nil if the key isn't present).
+func (d *Document) ListModrinthProjects() ([]string, error) {
+	env, err := d.environmentNode()
+	if err != nil {
+		return nil, err
+	}
+	return blockListLines(mapGet(env, "MODRINTH_PROJECTS")), nil
+}
+
+// ListCurseforgeFiles returns the slugs currently listed in
+// CURSEFORGE_FILES (nil if the key isn't present).
+func (d *Document) ListCurseforgeFiles() ([]string, error) {
+	env, err := d.environmentNode()
+	if err != nil {
+		return nil, err
+	}
+	return blockListLines(mapGet(env, "CURSEFORGE_FILES")), nil
+}
+
+// RemoveModrinthProject removes slug from MODRINTH_PROJECTS. removed is
+// false (with no error) if slug wasn't listed. The key itself is dropped
+// if the list becomes empty.
+func (d *Document) RemoveModrinthProject(slug string) (removed bool, err error) {
+	return d.removeFromBlockList("MODRINTH_PROJECTS", slug)
+}
+
+// RemoveCurseforgeFile removes slug from CURSEFORGE_FILES. removed is
+// false (with no error) if slug wasn't listed. The key itself is dropped
+// if the list becomes empty.
+func (d *Document) RemoveCurseforgeFile(slug string) (removed bool, err error) {
+	return d.removeFromBlockList("CURSEFORGE_FILES", slug)
+}
+
 func (d *Document) addToBlockList(envKey, entry string) (bool, error) {
 	env, err := d.environmentNode()
 	if err != nil {
 		return false, err
 	}
 	existing := mapGet(env, envKey)
-	var lines []string
-	if existing != nil {
-		for _, line := range strings.Split(existing.Value, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			if line == entry {
-				return false, nil
-			}
-			lines = append(lines, line)
+	lines := blockListLines(existing)
+	for _, line := range lines {
+		if line == entry {
+			return false, nil
 		}
 	}
 	lines = append(lines, entry)
@@ -132,6 +185,37 @@ func (d *Document) addToBlockList(envKey, entry string) (bool, error) {
 			Value: value,
 			Style: yaml.LiteralStyle,
 		})
+	}
+	return true, nil
+}
+
+func (d *Document) removeFromBlockList(envKey, entry string) (bool, error) {
+	env, err := d.environmentNode()
+	if err != nil {
+		return false, err
+	}
+	existing := mapGet(env, envKey)
+	if existing == nil {
+		return false, nil
+	}
+	found := false
+	var remaining []string
+	for _, line := range blockListLines(existing) {
+		if line == entry {
+			found = true
+			continue
+		}
+		remaining = append(remaining, line)
+	}
+	if !found {
+		return false, nil
+	}
+	if len(remaining) == 0 {
+		mapDelete(env, envKey)
+	} else {
+		existing.Value = strings.Join(remaining, "\n") + "\n"
+		existing.Style = yaml.LiteralStyle
+		existing.Tag = "!!str"
 	}
 	return true, nil
 }
