@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -47,6 +48,15 @@ func IsInstalled() bool {
 func IsRepo(dir string) bool {
 	out, err := Output(dir, "rev-parse", "--is-inside-work-tree")
 	return err == nil && out == "true"
+}
+
+// PathExistsAtRevision reports whether path exists (as a file or
+// directory) in revision's tree. Used before `git checkout <rev> -- path`,
+// which errors on any pathspec absent from that revision.
+func PathExistsAtRevision(dir, revision, path string) bool {
+	slashPath := strings.ReplaceAll(path, "\\", "/")
+	_, err := Output(dir, "cat-file", "-e", revision+":"+slashPath)
+	return err == nil
 }
 
 // HasRemote reports whether the repo in dir has a remote named name configured.
@@ -116,6 +126,70 @@ func LFSInstall(dir string) error {
 // .gitattributes accordingly.
 func LFSTrack(dir, pattern string) error {
 	return Run(dir, "lfs", "track", pattern)
+}
+
+// CommitInfo returns the short hash, author date, and subject of revision
+// (e.g. "HEAD", a commit hash, a tag).
+func CommitInfo(dir, revision string) (hash, date, subject string, err error) {
+	out, err := Output(dir, "log", "-1", "--format=%h%x1f%ai%x1f%s", revision)
+	if err != nil {
+		return "", "", "", err
+	}
+	parts := strings.SplitN(out, "\x1f", 3)
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("unexpected `git log` output for %s: %q", revision, out)
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
+// AheadBehind returns how many commits the current branch is ahead of and
+// behind its upstream (@{u}). Errors if no upstream is configured.
+func AheadBehind(dir string) (ahead, behind int, err error) {
+	out, err := Output(dir, "rev-list", "--left-right", "--count", "HEAD...@{u}")
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Fields(out)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected `git rev-list` output: %q", out)
+	}
+	if ahead, err = strconv.Atoi(parts[0]); err != nil {
+		return 0, 0, err
+	}
+	if behind, err = strconv.Atoi(parts[1]); err != nil {
+		return 0, 0, err
+	}
+	return ahead, behind, nil
+}
+
+// LogEntry is one commit's summary, as returned by LogPaths.
+type LogEntry struct {
+	Hash    string
+	Date    string
+	Subject string
+}
+
+// LogPaths returns up to limit commits (most recent first) that touched
+// any of paths.
+func LogPaths(dir string, limit int, paths ...string) ([]LogEntry, error) {
+	args := []string{"log", fmt.Sprintf("-%d", limit), "--format=%h%x1f%ai%x1f%s", "--"}
+	args = append(args, paths...)
+	out, err := Output(dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var entries []LogEntry
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\x1f", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		entries = append(entries, LogEntry{Hash: parts[0], Date: parts[1], Subject: parts[2]})
+	}
+	return entries, nil
 }
 
 // LFSPrune deletes old local Git LFS object copies from dir's

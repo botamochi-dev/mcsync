@@ -68,6 +68,30 @@ func ComposeOutput(dir string, args ...string) (string, error) {
 	return Output(dir, append([]string{"compose"}, args...)...)
 }
 
+// ServiceStatus returns service's container state (e.g. "running",
+// "exited") and health ("healthy"/"starting"/"unhealthy", or "" if the
+// image defines no healthcheck). Errors if no container exists for it.
+func ServiceStatus(dir, service string) (state, health string, err error) {
+	id, err := ComposeOutput(dir, "ps", "-q", service)
+	if err != nil {
+		return "", "", err
+	}
+	if id == "" {
+		return "", "", fmt.Errorf("no container for service %q", service)
+	}
+	out, err := Output(dir, "inspect", "--format",
+		"{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}", id)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.SplitN(out, "|", 2)
+	state = parts[0]
+	if len(parts) > 1 {
+		health = parts[1]
+	}
+	return state, health, nil
+}
+
 var readyLineRE = regexp.MustCompile(`Done \(`)
 
 // WaitHealthy streams service's logs to stdout live (so the caller sees
