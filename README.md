@@ -92,9 +92,10 @@ $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 2. **2台目以降のPC**で `mcsync setup <リポジトリURL>` → clone + サーバー起動
 3. 遊ぶ前に `mcsync start`(他PCの変更を取り込んでから起動)
 4. 遊び終わったら `mcsync stop`(サーバー停止→ワールド・設定をcommit・push)
-5. modを追加したくなったら `mcsync mods add <URL>`
+5. modを追加したくなったら `mcsync mods add <URL>`(または`data/mods`に直接jarを置く)
+6. 状態を確認したくなったら `mcsync status`、サーバーにコマンドを打ちたくなったら `mcsync console`、ワールドを昔の状態に戻したくなったら `mcsync restore`
 
-**鉄則: 同時に2台以上のPCでサーバーを起動しない。** ワールドデータはgitで同期しますが、2台で同時編集すると上書き事故(マージ不可能)になります。遊び終わったら必ず`mcsync stop`してから別PCに移ってください。
+**鉄則: 同時に2台以上のPCでサーバーを起動しない。** ワールドデータはgitで同期しますが、2台で同時編集すると上書き事故(マージ不可能)になります。遊び終わったら必ず`mcsync stop`してから別PCに移ってください。`mcsync start`は簡易ロック機構で他PCの起動中を検知して警告しますが(下記参照)、あくまで保険なので運用ルールとしても徹底してください。
 
 ## 4. コマンド一覧
 
@@ -194,6 +195,21 @@ mcsync.exe start
 
 バラのスラッグ(URLでなく`jei`のような文字列)を渡した場合はデフォルトでModrinth扱いになります。CurseForgeのスラッグを渡したい場合は `--type curseforge` を付けてください。
 
+### `mcsync mods list` / `mcsync mods remove`
+
+```
+mcsync.exe mods list
+```
+
+`docker-compose.yml`に書かれているModrinth/CurseForgeのmod一覧と、`data/mods`に実際に置かれているjarファイル一覧をまとめて表示します。「設定上は入っているはずのmodが実際にダウンロードされているか」を確認するのに使えます。
+
+```
+mcsync.exe mods remove jei
+mcsync.exe mods remove https://www.curseforge.com/minecraft/mc-mods/sophisticated-backpacks
+```
+
+`mods add`と逆に、`docker-compose.yml`からmodを取り除きます。`mods add`と同様、変更は自動でcommit・push されます。**ただし`data/mods`に既にダウンロード済みのjarそのものは自動削除されません**(itzgイメージが古いmodを消すのは`REMOVE_OLD_MODS`を有効にした場合のみで、mcsyncのデフォルト設定には含まれていません)。完全に消したい場合は`data/mods`から手動でjarを削除してください。
+
 ### Modrinth/CurseForgeに無いmod(自作・個人配布のjar)を追加する
 
 ModrinthにもCurseForgeにも無いmod(自作のもの、知人から直接もらったjarなど)は`mods add`では追加できません。その場合は、**`data/mods`フォルダにjarファイルをそのまま置いてください。**
@@ -268,6 +284,22 @@ prune: Deleting objects: 100% (1/1), done.
 
 git-lfsが入っていない、またはリモートが未設定のプロジェクトではこのクリーンアップはスキップされます(失敗しても`start`/`stop`自体は止まりません)。
 
+#### 多重起動の検知(ロック機構)
+
+`start`はサーバー起動が成功すると、`.mcsync-lock`という小さなファイル(起動したPCのホスト名・git user.name・起動時刻をJSONで記録)を作り、即座にcommit・pushします。次に別のPCで`start`しようとした時、pull後にこのロックファイルを確認し、**自分以外のホスト名のロックが残っていたら起動を拒否**します。
+
+```
+Error: another PC (DESKTOP-XXXX / friend) may still be running this server, started 2026-07-16 10:00.
+Starting anyway risks overwriting their progress when they save.
+Make sure it's really stopped there, then retry with --force to override
+```
+
+`stop`はサーバー停止時に、**自分のPCが持つロックだけ**を削除し、world/config/modsの保存commitに含めます(別PCのロックは触りません)。
+
+本当に相手PCが停止済みであることを確認した上で起動したい場合(相手がclose忘れただけ、等)は `mcsync start --force` でロックを無視して起動できます。逆に、自分のPCがクラッシュ等で`stop`できずに再起動した場合は、**同じホスト名のロックは自動的に「前回の後始末忘れ」とみなされ**、警告表示だけで通常通り起動します。
+
+このロックはあくまで「pushされたロックファイルをpull後に見る」だけの簡易的な仕組みで、完全な排他制御(2台が同時にpushしようとするレースコンディションなど)までは保証しません。README冒頭の「同時に2台以上で起動しない」という運用ルールを補助するための保険と考えてください。
+
 ### `mcsync stop`
 
 遊び終わったら実行します。
@@ -277,10 +309,87 @@ mcsync.exe stop
 ```
 
 1. `docker compose down`(サーバー停止)
-2. ワールド(`data/world`)・設定(`data/config`, `server.properties`, `ops.json`, `whitelist.json`)・mod(`data/mods`)をcommit
+2. ワールド(`data/world`)・設定(`data/config`, `server.properties`, `ops.json`, `whitelist.json`)・mod(`data/mods`)・起動ロック(`.mcsync-lock`、自分のPCの分のみ)をcommit
 3. リモートが設定されていれば`git push`、続けてローカルのGit LFSキャッシュを自動クリーンアップ(上記参照)
 
 **遊び終わったら他のことをする前に必ずこれを実行する**のがルールです。stopし忘れると次に別PCで`start`した時に他PCの変更を取り込めず、データが古いまま上書きされる恐れがあります。
+
+### `mcsync status`
+
+今どういう状態か一目で確認したい時に使います。トラブルシューティングの起点として、まずこれを実行するのがおすすめです。
+
+```
+mcsync.exe status
+```
+
+```
+Server:
+  running (healthy)
+
+Git:
+  Last save: 2026-07-16 17:44:48 +0900  Save world state: 2026-07-16 17:44:48  (c3e5706)
+  up to date with origin
+  Lock: held by DESKTOP-XXXX (this PC) / you since 2026-07-16 17:44
+
+Disk usage:
+  data/world: 42.1 MiB
+  .git: 118.3 MiB
+    of which LFS cache: 95.2 MiB
+```
+
+表示内容:
+- **Server**: コンテナが起動しているか、healthかどうか
+- **Git**: 最後にsaveされたのはいつか、commitはあるがpushし忘れていないか(またはpullし忘れていないか)、今ロックを持っているのは誰か
+- **Disk usage**: `data/world`と`.git`(内訳としてGit LFSキャッシュ)のサイズ。肥大化に早めに気づくための目安
+
+### `mcsync console [コマンド...]`
+
+サーバーにコマンドを打ちたい時のショートカットです。中身は`docker compose exec mc rcon-cli`のラッパーです。
+
+```
+mcsync.exe console          # 対話コンソールを開く(抜けるにはexit)
+mcsync.exe console list     # 1コマンドだけ実行してすぐ終了
+mcsync.exe console save-all
+mcsync.exe console op プレイヤー名
+```
+
+### `mcsync restore [commit]`
+
+ワールドを過去の保存状態に戻したい時に使います。`mcsync stop`(や`autosave`)のcommitがそのままセーブポイントになっているので、専用のバックアップの仕組みは不要です。
+
+引数無しで実行すると、`data/world`に関わる直近のsave履歴が一覧表示されます:
+
+```
+mcsync.exe restore
+```
+```
+Recent saves (commits touching data/world):
+  54444c8  2026-07-16 17:47:44 +0900  Save world state: 2026-07-16 17:47:44
+  c084e09  2026-07-16 17:47:43 +0900  Save world state: 2026-07-16 17:47:43
+
+Run `mcsync restore <hash>` to roll back to one of these.
+```
+
+戻したいcommitのハッシュを指定すると、確認を挟んでから復元します:
+
+```
+mcsync.exe restore c084e09
+```
+
+- サーバーが起動中だと拒否されます(先に`mcsync stop`してください)
+- 復元は**新しいcommitとして記録される**ので、今の状態が消えるわけではなく、git履歴を遡れば元に戻せます(`git reset --hard`のような破壊的な操作はしません)
+- 確認プロンプトを省略したい場合は `-y`/`--yes` を付けてください
+
+### `mcsync autosave`
+
+長時間プレイ中、停電やクラッシュに備えて**サーバーを止めずに**定期的にセーブ・pushしたい場合に使います。
+
+```
+mcsync.exe autosave                    # デフォルト15分おき
+mcsync.exe autosave --interval 5m      # 間隔を変更
+```
+
+フォアグラウンドで動き続け、Ctrl+Cで停止できます(サーバー自体は止まりません)。保存の直前に、ベストエフォートで`save-all`をRCON経由で実行してから git commit するので、書き込み中の中途半端な状態をそのままcommitしてしまう可能性を減らしています。
 
 ## 5. docker-compose.yml の中身
 
@@ -345,6 +454,8 @@ data/*.log
 | `mods add`で「docker-compose.ymlが見つからない」 | プロジェクトのルートフォルダ(docker-compose.ymlがある場所)で実行しているか確認 |
 | 初回`start`後、サーバーに繋がらない | Forge本体のダウンロード・インストール中の可能性。`docker compose logs -f mc`でログを見て`Done`が出るまで待つ |
 | `data/mods`のjarが数百バイトしかない/サーバーがmodエラーで落ちる | Git LFSが未インストールのままcloneした可能性。`git lfs install`してから`git lfs pull`でLFSの実体を取得し直す(以後は`mcsync doctor`で事前確認を) |
+| `mcsync start`が「another PC may still be running」で止まる | 実際に他PCで起動中でないか確認。停止済みなら`mcsync start --force`。自分のPCがクラッシュ後の再起動なら自動で無視されるはず(それでも出る場合はホスト名が変わった等の可能性) |
+| `mcsync status`のLockが誰も使っていないのに残ったまま | 相手PCが`mcsync stop`せずに終了した可能性。相手に`mcsync stop`してもらうか、状況を確認した上で`.mcsync-lock`を手動で削除してcommit・push |
 | ルーター越しに友人を招待したい | mcsyncの範囲外です。ルーターのポートフォワーディング(25565/TCP)や、Tailscale等のVPNを別途設定してください |
 
 困ったら、まず `mcsync doctor` を実行してください。
@@ -358,18 +469,23 @@ mcsync/
     root.go                       ルートコマンド定義
     init.go                       `mcsync init`
     setup.go                      `mcsync setup`
-    mods.go                       `mcsync mods add`
+    mods.go                       `mcsync mods add/remove/list`
     start.go                      `mcsync start`
-    stop.go                       `mcsync stop`
+    stop.go                       `mcsync stop`、`saveTrackedState`(stop/autosave共通の保存ロジック)
+    status.go                     `mcsync status`
+    console.go                    `mcsync console`
+    restore.go                    `mcsync restore`
+    autosave.go                   `mcsync autosave`
+    lock.go                       多重起動検知用ロックファイルの読み書き
     doctor.go                     `mcsync doctor`
   internal/
     gitutil/                      gitをサブプロセスとして呼ぶだけのラッパー
     dockerutil/                   docker / docker composeをサブプロセスとして呼ぶだけのラッパー
     forgeversion/                 Forge公式のpromotions_slim.jsonから推奨バージョンを取得
     scaffold/                     `init`時に生成するdocker-compose.yml/.gitignoreのテンプレート
-    composeedit/                  既存docker-compose.ymlをyaml.Node経由で安全に差分編集(mods add用)
+    composeedit/                  既存docker-compose.ymlをyaml.Node経由で安全に差分編集(mods add/remove/list用)
     modurl/                       Modrinth/CurseForgeのURLからmodスラッグを抽出
-    prompt/                       `init`の対話入力ヘルパー
+    prompt/                       `init`/`restore`の対話入力ヘルパー
 ```
 
 設計方針は一貫して「gitとdocker composeの薄いラッパーであること」です。Forgeのインストールやmodのダウンロードロジックはmcsync側には一切存在せず、全てitzg/docker-minecraft-serverイメージに任せています。
