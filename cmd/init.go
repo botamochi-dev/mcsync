@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"mcsync/internal/forgeversion"
+	"mcsync/internal/ghutil"
 	"mcsync/internal/gitutil"
 	"mcsync/internal/manifest"
 	"mcsync/internal/prompt"
@@ -22,22 +24,28 @@ var (
 	initRemote       string
 	initDir          string
 	initForce        bool
+	initCreateRepo   string
+	initRepoPublic   bool
+	initSSHHost      string
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Create a new mcsync project (mcsync.yml + .gitignore + git repo)",
+	Short: "新しいmcsyncプロジェクトを作成する(mcsync.yml + .gitignore + gitリポジトリ)",
 	RunE:  runInit,
 }
 
 func init() {
-	initCmd.Flags().StringVar(&initName, "name", "", "project name")
-	initCmd.Flags().StringVar(&initMCVersion, "mc-version", "", "Minecraft version, e.g. 1.20.1")
-	initCmd.Flags().StringVar(&initForgeVersion, "forge-version", "", "Forge version; leave empty to auto-pick the recommended build")
-	initCmd.Flags().StringVar(&initMemory, "memory", "", "memory allocated to the server, e.g. 4G")
-	initCmd.Flags().StringVar(&initRemote, "remote", "", "git remote URL to push the initial commit to (optional)")
-	initCmd.Flags().StringVar(&initDir, "dir", ".", "directory to create the project in")
-	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing mcsync.yml")
+	initCmd.Flags().StringVar(&initName, "name", "", "プロジェクト名")
+	initCmd.Flags().StringVar(&initMCVersion, "mc-version", "", "Minecraftバージョン(例: 1.20.1)")
+	initCmd.Flags().StringVar(&initForgeVersion, "forge-version", "", "Forgeバージョン(空欄なら推奨版を自動選択)")
+	initCmd.Flags().StringVar(&initMemory, "memory", "", "サーバーに割り当てるメモリ量(例: 4G)")
+	initCmd.Flags().StringVar(&initRemote, "remote", "", "既存のGitリモートURL(指定時はリポジトリ自動作成をスキップ)")
+	initCmd.Flags().StringVar(&initCreateRepo, "create-repo", "", "この名前でGitHubリポジトリを新規作成する(gh CLIが必要)")
+	initCmd.Flags().BoolVar(&initRepoPublic, "repo-public", false, "--create-repoで作成するリポジトリをpublicにする(デフォルトはprivate)")
+	initCmd.Flags().StringVar(&initSSHHost, "ssh-host", "", "リモートURLに使うSSH Hostエイリアス(例: github.com-work。空欄ならgithub.com)")
+	initCmd.Flags().StringVar(&initDir, "dir", ".", "プロジェクトを作成するディレクトリ")
+	initCmd.Flags().BoolVar(&initForce, "force", false, "既存のmcsync.ymlを上書きする")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -47,41 +55,43 @@ func runInit(c *cobra.Command, args []string) error {
 		return err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating %s: %w", dir, err)
+		return fmt.Errorf("%s の作成に失敗しました: %w", dir, err)
 	}
 
 	manifestPath := filepath.Join(dir, manifest.FileName)
 	if _, err := os.Stat(manifestPath); err == nil && !initForce {
-		return fmt.Errorf("%s already exists (use --force to overwrite)", manifestPath)
+		return fmt.Errorf("%s は既に存在します(上書きするには --force を指定してください)", manifestPath)
 	}
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	if _, err := os.Stat(gitignorePath); err == nil && !initForce {
-		return fmt.Errorf("%s already exists (use --force to overwrite)", gitignorePath)
+		return fmt.Errorf("%s は既に存在します(上書きするには --force を指定してください)", gitignorePath)
 	}
 
 	if initName == "" {
-		initName = prompt.Ask("Project name", filepath.Base(dir))
+		initName = prompt.Ask("プロジェクト名", filepath.Base(dir))
 	}
 	if initMCVersion == "" {
-		initMCVersion = prompt.Ask("Minecraft version", "1.20.1")
+		initMCVersion = prompt.Ask("Minecraftバージョン", "1.20.1")
 	}
 	if initForgeVersion == "" {
-		initForgeVersion = prompt.Ask("Forge version (blank = auto-pick recommended)", "")
+		initForgeVersion = prompt.Ask("Forgeバージョン(空欄で推奨版を自動選択)", "")
 	}
 	if initForgeVersion == "" {
-		fmt.Printf("Looking up recommended Forge version for Minecraft %s...\n", initMCVersion)
+		fmt.Printf("Minecraft %s の推奨Forgeバージョンを確認しています...\n", initMCVersion)
 		v, err := forgeversion.Recommended(initMCVersion)
 		if err != nil {
-			return fmt.Errorf("auto-picking Forge version: %w (pass --forge-version to set it manually)", err)
+			return fmt.Errorf("Forgeバージョンの自動選択に失敗しました: %w (--forge-version で手動指定してください)", err)
 		}
 		initForgeVersion = v
-		fmt.Printf("Using Forge %s\n", initForgeVersion)
+		fmt.Printf("Forge %s を使用します\n", initForgeVersion)
 	}
 	if initMemory == "" {
-		initMemory = prompt.Ask("Memory", "4G")
+		initMemory = prompt.Ask("メモリ量", "4G")
 	}
-	if initRemote == "" {
-		initRemote = prompt.Ask("Git remote URL (blank = skip)", "")
+
+	remoteURL, err := resolveRemoteURL(initName)
+	if err != nil {
+		return err
 	}
 
 	projectName := scaffold.SanitizeProjectName(initName)
@@ -95,15 +105,15 @@ func runInit(c *cobra.Command, args []string) error {
 		return err
 	}
 	if err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", manifestPath, err)
+		return fmt.Errorf("%s の書き込みに失敗しました: %w", manifestPath, err)
 	}
 	if err := os.WriteFile(gitignorePath, []byte(scaffold.Gitignore), 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", gitignorePath, err)
+		return fmt.Errorf("%s の書き込みに失敗しました: %w", gitignorePath, err)
 	}
-	fmt.Printf("Wrote %s and %s\n", manifestPath, gitignorePath)
+	fmt.Printf("%s と %s を作成しました\n", manifestPath, gitignorePath)
 
 	if !gitutil.IsInstalled() {
-		fmt.Println("git is not installed; skipping repo setup. Run `mcsync doctor` for details.")
+		fmt.Println("gitがインストールされていないため、リポジトリのセットアップをスキップします。詳細は `mcsync doctor` を実行してください。")
 		return nil
 	}
 
@@ -115,16 +125,17 @@ func runInit(c *cobra.Command, args []string) error {
 
 	if gitutil.LFSInstalled() {
 		if err := gitutil.LFSInstall(dir); err != nil {
-			fmt.Printf("Warning: `git lfs install` failed: %v\n", err)
+			fmt.Printf("警告: `git lfs install` に失敗しました: %v\n", err)
 		} else if err := gitutil.LFSTrack(dir, scaffold.ModsLFSPattern); err != nil {
-			fmt.Printf("Warning: `git lfs track` failed: %v\n", err)
+			fmt.Printf("警告: `git lfs track` に失敗しました: %v\n", err)
 		} else {
-			fmt.Printf("Mod jars under data/mods will be tracked via Git LFS (%s)\n", scaffold.ModsLFSPattern)
+			fmt.Printf("data/mods 配下のmod jarはGit LFSで追跡されます(%s)\n", scaffold.ModsLFSPattern)
 		}
 	} else {
-		fmt.Printf("Note: git-lfs isn't installed, so mod jars placed in data/mods will be tracked as regular "+
-			"(non-LFS) git objects. This works but can bloat the repo for large/frequently-updated jars. "+
-			"Install git-lfs (https://git-lfs.com) and run `git lfs track \"%s\"` later to switch.\n", scaffold.ModsLFSPattern)
+		fmt.Printf("注意: git-lfsがインストールされていないため、data/modsに置いたmod jarは通常の"+
+			"(LFSでない)gitオブジェクトとして追跡されます。動作はしますが、大きい・頻繁に更新されるjarでは"+
+			"リポジトリが肥大化しやすくなります。git-lfs(https://git-lfs.com)をインストール後、"+
+			"`git lfs track \"%s\"` を実行すれば切り替えられます。\n", scaffold.ModsLFSPattern)
 	}
 
 	addArgs := []string{"add", manifest.FileName, ".gitignore"}
@@ -143,12 +154,12 @@ func runInit(c *cobra.Command, args []string) error {
 			return err
 		}
 	} else {
-		fmt.Println("Nothing new to commit.")
+		fmt.Println("commitする新しい変更はありません。")
 	}
 
-	if initRemote != "" {
+	if remoteURL != "" {
 		if !gitutil.HasRemote(dir, "origin") {
-			if err := gitutil.Run(dir, "remote", "add", "origin", initRemote); err != nil {
+			if err := gitutil.Run(dir, "remote", "add", "origin", remoteURL); err != nil {
 				return err
 			}
 		}
@@ -157,11 +168,71 @@ func runInit(c *cobra.Command, args []string) error {
 			branch = "main"
 		}
 		if err := gitutil.Run(dir, "push", "-u", "origin", branch); err != nil {
-			return fmt.Errorf("pushing to %s: %w (you can push manually later)", initRemote, err)
+			return fmt.Errorf("%s へのpushに失敗しました: %w (後で手動でpushしてください)", remoteURL, err)
 		}
 	}
 
-	fmt.Println("\nDone. Next: `mcsync start` to launch the server " +
-		"(first start downloads Java and Forge automatically -- can take a few minutes).")
+	fmt.Println("\n完了しました。次は `mcsync start` でサーバーを起動してください" +
+		"(初回はJavaとForgeの自動ダウンロードが走るため数分かかります)。")
 	return nil
+}
+
+// resolveRemoteURL determines the git remote URL to use, either from an
+// existing repository URL the user provides or by creating a brand new
+// GitHub repository via gh and constructing its URL ourselves (so a
+// custom SSH config Host alias, e.g. "github.com-work" for juggling
+// multiple GitHub accounts, is honored -- gh itself is only ever used to
+// create the repository, never to touch the local git remote).
+func resolveRemoteURL(projectName string) (string, error) {
+	if initRemote != "" {
+		return initRemote, nil
+	}
+	if initCreateRepo != "" {
+		return createGitHubRepo(initCreateRepo, !initRepoPublic, initSSHHost)
+	}
+
+	if !prompt.Confirm("GitHubリポジトリは既に作成済みですか？", false) {
+		if !ghutil.IsInstalled() {
+			fmt.Println("注意: gh (GitHub CLI) が見つからないため、リポジトリの自動作成はスキップします。" +
+				"https://cli.github.com/ からインストールすると次回から自動作成できます。")
+			return prompt.Ask("GitリモートURL(空欄でスキップ)", ""), nil
+		}
+		account, ok := ghutil.CurrentAccount()
+		if !ok {
+			fmt.Println("注意: gh が未認証のため、リポジトリの自動作成はスキップします。" +
+				"`gh auth login` を実行してから再度お試しください。")
+			return prompt.Ask("GitリモートURL(空欄でスキップ)", ""), nil
+		}
+		if !prompt.Confirm(fmt.Sprintf("GitHubアカウント \"%s\" で作成します。よろしいですか？", account), true) {
+			return "", fmt.Errorf("`gh auth switch` でアカウントを切り替えてから再実行してください")
+		}
+		name := prompt.Ask("リポジトリ名", scaffold.SanitizeProjectName(projectName))
+		visibility := prompt.Ask("公開設定 (public/private)", "private")
+		private := !strings.EqualFold(strings.TrimSpace(visibility), "public")
+		sshHost := prompt.Ask("SSH Hostエイリアス(空欄 = github.com、例: github.com-work)", "")
+		return createGitHubRepo(name, private, sshHost)
+	}
+
+	return prompt.Ask("GitリモートURL(空欄でスキップ)", ""), nil
+}
+
+func createGitHubRepo(name string, private bool, sshHost string) (string, error) {
+	if !ghutil.IsInstalled() {
+		return "", fmt.Errorf("gh (GitHub CLI) がインストールされていません。https://cli.github.com/ からインストールしてください")
+	}
+	visibility := "private"
+	if !private {
+		visibility = "public"
+	}
+	fmt.Printf("GitHubリポジトリ %s を作成しています(%s)...\n", name, visibility)
+	owner, repo, err := ghutil.CreateRepo(name, private)
+	if err != nil {
+		return "", fmt.Errorf("GitHubリポジトリの作成に失敗しました: %w", err)
+	}
+	if sshHost == "" {
+		sshHost = "github.com"
+	}
+	url := fmt.Sprintf("git@%s:%s/%s.git", sshHost, owner, repo)
+	fmt.Printf("作成しました: %s\n", url)
+	return url, nil
 }
