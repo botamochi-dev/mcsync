@@ -9,6 +9,7 @@ import (
 
 	"mcsync/internal/forgeversion"
 	"mcsync/internal/gitutil"
+	"mcsync/internal/manifest"
 	"mcsync/internal/prompt"
 	"mcsync/internal/scaffold"
 )
@@ -25,18 +26,18 @@ var (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Create a new mcsync project (docker-compose.yml + .gitignore + git repo)",
+	Short: "Create a new mcsync project (mcsync.yml + .gitignore + git repo)",
 	RunE:  runInit,
 }
 
 func init() {
-	initCmd.Flags().StringVar(&initName, "name", "", "project name (used as the compose project name)")
+	initCmd.Flags().StringVar(&initName, "name", "", "project name")
 	initCmd.Flags().StringVar(&initMCVersion, "mc-version", "", "Minecraft version, e.g. 1.20.1")
 	initCmd.Flags().StringVar(&initForgeVersion, "forge-version", "", "Forge version; leave empty to auto-pick the recommended build")
 	initCmd.Flags().StringVar(&initMemory, "memory", "", "memory allocated to the server, e.g. 4G")
 	initCmd.Flags().StringVar(&initRemote, "remote", "", "git remote URL to push the initial commit to (optional)")
 	initCmd.Flags().StringVar(&initDir, "dir", ".", "directory to create the project in")
-	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing docker-compose.yml")
+	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing mcsync.yml")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -49,9 +50,9 @@ func runInit(c *cobra.Command, args []string) error {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 
-	composePath := filepath.Join(dir, "docker-compose.yml")
-	if _, err := os.Stat(composePath); err == nil && !initForce {
-		return fmt.Errorf("%s already exists (use --force to overwrite)", composePath)
+	manifestPath := filepath.Join(dir, manifest.FileName)
+	if _, err := os.Stat(manifestPath); err == nil && !initForce {
+		return fmt.Errorf("%s already exists (use --force to overwrite)", manifestPath)
 	}
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	if _, err := os.Stat(gitignorePath); err == nil && !initForce {
@@ -84,7 +85,7 @@ func runInit(c *cobra.Command, args []string) error {
 	}
 
 	projectName := scaffold.SanitizeProjectName(initName)
-	composeContent, err := scaffold.RenderCompose(scaffold.ComposeData{
+	manifestContent, err := scaffold.RenderManifest(scaffold.ManifestData{
 		ProjectName:  projectName,
 		MCVersion:    initMCVersion,
 		ForgeVersion: initForgeVersion,
@@ -93,13 +94,13 @@ func runInit(c *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(composePath, []byte(composeContent), 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", composePath, err)
+	if err := os.WriteFile(manifestPath, []byte(manifestContent), 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", manifestPath, err)
 	}
 	if err := os.WriteFile(gitignorePath, []byte(scaffold.Gitignore), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", gitignorePath, err)
 	}
-	fmt.Printf("Wrote %s and %s\n", composePath, gitignorePath)
+	fmt.Printf("Wrote %s and %s\n", manifestPath, gitignorePath)
 
 	if !gitutil.IsInstalled() {
 		fmt.Println("git is not installed; skipping repo setup. Run `mcsync doctor` for details.")
@@ -126,7 +127,7 @@ func runInit(c *cobra.Command, args []string) error {
 			"Install git-lfs (https://git-lfs.com) and run `git lfs track \"%s\"` later to switch.\n", scaffold.ModsLFSPattern)
 	}
 
-	addArgs := []string{"add", "docker-compose.yml", ".gitignore"}
+	addArgs := []string{"add", manifest.FileName, ".gitignore"}
 	if _, err := os.Stat(filepath.Join(dir, ".gitattributes")); err == nil {
 		addArgs = append(addArgs, ".gitattributes")
 	}
@@ -160,6 +161,7 @@ func runInit(c *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Println("\nDone. Next: `docker compose up -d` (or `mcsync start`) to launch the server.")
+	fmt.Println("\nDone. Next: `mcsync start` to launch the server " +
+		"(first start downloads Java and Forge automatically -- can take a few minutes).")
 	return nil
 }

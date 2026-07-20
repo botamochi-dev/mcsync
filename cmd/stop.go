@@ -2,19 +2,20 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"mcsync/internal/dockerutil"
 	"mcsync/internal/gitutil"
+	"mcsync/internal/serverproc"
 )
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the server, then commit and push world/config/mods changes",
+	Short: "サーバーを停止し、world/config/modの変更をcommit・pushする",
 	RunE:  runStop,
 }
 
@@ -22,9 +23,14 @@ func init() {
 	rootCmd.AddCommand(stopCmd)
 }
 
+// stopTimeout bounds how long we wait for a graceful "stop" (world save +
+// clean exit) before forcing termination.
+const stopTimeout = 2 * time.Minute
+
 // trackedStatePaths are the parts of data/ that .gitignore keeps (see
 // scaffold.Gitignore): world, config, server.properties, ops/whitelist,
-// and mods (tracked via Git LFS -- see scaffold.ModsLFSPattern).
+// and mods (jars placed directly in data/mods, tracked via Git LFS -- see
+// scaffold.ModsLFSPattern).
 var trackedStatePaths = []string{
 	filepath.Join("data", "world"),
 	filepath.Join("data", "config"),
@@ -37,33 +43,45 @@ var trackedStatePaths = []string{
 func runStop(c *cobra.Command, args []string) error {
 	dir := "."
 
-	fmt.Println("Stopping the server...")
-	if err := dockerutil.Compose(dir, "down"); err != nil {
-		return err
+	if running, _ := serverproc.IsRunning(mustAbs(dir)); running {
+		fmt.Println("サーバーを停止しています...")
+		if err := serverproc.Stop(mustAbs(dir), stopTimeout); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("サーバーは起動していません。")
 	}
 
 	if !gitutil.IsInstalled() || !gitutil.IsRepo(dir) {
-		fmt.Println("Not a git repo; skipping save. Run `mcsync init` first if you want world/config synced.")
+		fmt.Println("gitリポジトリではないため保存をスキップします。world/configを同期したい場合は先に `mcsync init` を実行してください。")
 		return nil
 	}
 
 	if err := saveTrackedState(dir, false); err != nil {
 		return err
 	}
-	fmt.Println("\nDone. World/config saved.")
+	fmt.Println("\n完了しました。world/configを保存しました。")
 	return nil
 }
 
 // saveTrackedState commits (and pushes, if a remote is configured) any
 // changes under trackedStatePaths. Shared by `stop` (server already
-// stopped) and `autosave` (server still running -- liveServer flushes the
-// world to disk via RCON first, and leaves the start lock alone since the
-// session isn't actually over).
+// stopped) and `autosave` (server still running -- liveServer best-effort
+// asks the server to save-all via its console first, and leaves the start
+// lock alone since the session isn't actually over).
 func saveTrackedState(dir string, liveServer bool) error {
 	if liveServer {
-		// Best-effort: make sure the world on disk is consistent before
-		// snapshotting it. Ignored if RCON isn't reachable.
-		_ = dockerutil.Compose(dir, "exec", "mc", "rcon-cli", "save-all")
+		_ = serverproc.SendCommand(mustAbs(dir), "save-all")
+		// Give the write a moment to land before snapshotting; best-effort,
+		// same spirit as before -- there's no ack to wait on without RCON.
+		time.Sleep(2 * time.Second)
+	}
+
+	if !liveServer && worldLocked(dir) {
+		return fmt.Errorf("data/worldが起動中のMinecraftサーバーによってまだ開かれているため、今は保存できません。\n" +
+			"多くの場合、mcsyncを使わずに(例えばrun.batを直接ダブルクリックして)サーバーを起動しており、" +
+			"mcsyncがそれを把握できず上で停止できなかったことが原因です。\n" +
+			"そちらのウィンドウ/コンソールでサーバーを停止してから、もう一度 `mcsync stop` を実行してください。")
 	}
 
 	var toAdd []string
@@ -75,12 +93,12 @@ func saveTrackedState(dir string, liveServer bool) error {
 	if !liveServer {
 		lockFiles, err := removeLockAndStage(dir)
 		if err != nil {
-			fmt.Printf("Warning: couldn't remove lock file: %v\n", err)
+			fmt.Printf("警告: ロックファイルの削除に失敗しました: %v\n", err)
 		}
 		toAdd = append(toAdd, lockFiles...)
 	}
 	if len(toAdd) == 0 {
-		fmt.Println("No world/config/mods data found to save.")
+		fmt.Println("保存対象のworld/config/modデータが見つかりませんでした。")
 		return nil
 	}
 
@@ -92,7 +110,7 @@ func saveTrackedState(dir string, liveServer bool) error {
 		return err
 	}
 	if !changed {
-		fmt.Println("No world/config/mods changes since last save.")
+		fmt.Println("前回の保存からworld/config/modに変更はありません。")
 		return nil
 	}
 
@@ -102,13 +120,35 @@ func saveTrackedState(dir string, liveServer bool) error {
 	}
 
 	if gitutil.HasRemote(dir, "origin") {
-		fmt.Println("Pushing...")
+		fmt.Println("pushしています...")
 		if err := gitutil.Run(dir, "push"); err != nil {
-			return fmt.Errorf("%w\n(the save was committed locally; push manually once this is resolved)", err)
+			return fmt.Errorf("%w\n(保存はローカルにcommit済みです。解決後に手動でpushしてください)", err)
 		}
 		pruneLFSCache(dir)
 	} else {
-		fmt.Println("No git remote configured; saved locally only.")
+		fmt.Println("Gitリモートが設定されていないため、ローカルにのみ保存しました。")
 	}
 	return nil
+}
+
+// worldLocked reports whether data/world/session.lock is currently held
+// by a running Minecraft process. Minecraft keeps a byte-range lock on
+// that file for as long as the world is loaded (it's how the game itself
+// detects "is this world already in use"). On Windows, merely opening the
+// file still succeeds -- the violation only surfaces once something
+// actually tries to read the locked range, which is exactly what trips up
+// `git add` (and what git's own error above came from). So we do the same
+// read here, up front, to turn that into one clear error instead of `git
+// add` failing confusingly partway through indexing data/world -- any
+// server holding the lock counts, not just one mcsync itself started.
+func worldLocked(dir string) bool {
+	path := filepath.Join(dir, "data", "world", "session.lock")
+	f, err := os.Open(path)
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	defer f.Close()
+	var buf [1]byte
+	_, err = f.Read(buf[:])
+	return err != nil && err != io.EOF
 }

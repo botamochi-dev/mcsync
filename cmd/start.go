@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"mcsync/internal/dockerutil"
 	"mcsync/internal/gitutil"
+	"mcsync/internal/serverproc"
 )
 
 var (
@@ -15,19 +15,19 @@ var (
 	startForce  bool
 )
 
-// startupTimeout is generous because the first boot on a fresh PC downloads
-// and installs Forge plus every mod from scratch.
+// startupTimeout is generous because the first boot on a fresh PC
+// downloads Java and Forge (and installs Forge) from scratch.
 const startupTimeout = 30 * time.Minute
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Pull the latest world/config from git, then start the server",
+	Short: "gitから最新のworld/configを取り込んでからサーバーを起動する",
 	RunE:  runStart,
 }
 
 func init() {
-	startCmd.Flags().BoolVar(&startNoWait, "no-wait", false, "return immediately instead of showing startup progress")
-	startCmd.Flags().BoolVar(&startForce, "force", false, "start even if another PC's lock looks active")
+	startCmd.Flags().BoolVar(&startNoWait, "no-wait", false, "起動完了を待たずにすぐ戻る")
+	startCmd.Flags().BoolVar(&startForce, "force", false, "他PCのロックが残っていても強制的に起動する")
 	rootCmd.AddCommand(startCmd)
 }
 
@@ -38,45 +38,45 @@ func runStart(c *cobra.Command, args []string) error {
 
 	if tracked {
 		if remoteConfigured {
-			fmt.Println("Pulling latest changes...")
+			fmt.Println("最新の変更を取り込んでいます...")
 			if err := gitutil.Run(dir, "pull", "--ff-only"); err != nil {
-				return fmt.Errorf("%w\n(if this is a merge conflict, resolve it manually before starting the server -- "+
-					"do not start with unresolved world/config conflicts)", err)
+				return fmt.Errorf("%w\n(マージコンフリクトの場合は、world/configの競合を解決してからサーバーを起動してください)", err)
 			}
 			pruneLFSCache(dir)
 			if err := checkLock(dir, startForce); err != nil {
 				return err
 			}
 		} else {
-			fmt.Println("No git remote configured; skipping pull.")
+			fmt.Println("Gitリモートが設定されていないため、pullをスキップします。")
 		}
 	}
 
-	if !dockerutil.DaemonRunning() {
-		return fmt.Errorf("Docker daemon isn't running; start Docker Desktop and try again")
+	javaBinDir, err := prepareServer(dir)
+	if err != nil {
+		return err
 	}
 
-	fmt.Println("Starting the server...")
-	if err := dockerutil.Compose(dir, "up", "-d"); err != nil {
+	fmt.Println("サーバーを起動しています...")
+	if err := serverproc.Start(mustAbs(dir), javaBinDir); err != nil {
 		return err
 	}
 
 	if remoteConfigured {
 		if err := writeLockAndCommit(dir); err != nil {
-			fmt.Printf("Warning: couldn't record start lock: %v\n", err)
+			fmt.Printf("警告: 起動ロックの記録に失敗しました: %v\n", err)
 		}
 	}
 
 	if startNoWait {
-		fmt.Println("\nServer starting in the background. Watch logs with: docker compose logs -f mc")
+		fmt.Println("\nバックグラウンドでサーバーを起動しています。進捗は `mcsync status` で確認できます。")
 		return nil
 	}
 
-	fmt.Println("Waiting for the server to finish starting (first boot on a new PC can take a while -- " +
-		"Forge and mods are downloaded from scratch)...")
-	if err := dockerutil.WaitHealthy(dir, "mc", startupTimeout); err != nil {
+	fmt.Println("サーバーの起動完了を待っています(新しいPCでの初回起動はForgeのダウンロード・" +
+		"インストールが走るため時間がかかります)...")
+	if err := waitReady(dir, startupTimeout); err != nil {
 		return err
 	}
-	fmt.Println("\nServer is up. Connect with localhost in Minecraft's multiplayer screen.")
+	fmt.Println("\nサーバーが起動しました。Minecraftのマルチプレイ画面から localhost で接続できます。")
 	return nil
 }

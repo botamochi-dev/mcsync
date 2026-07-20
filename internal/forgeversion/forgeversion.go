@@ -31,26 +31,26 @@ func Recommended(mcVersion string) (string, error) {
 	if v, ok := proms.Promos[mcVersion+"-latest"]; ok {
 		return v, nil
 	}
-	return "", fmt.Errorf("no Forge build found for Minecraft %s (checked -recommended and -latest)", mcVersion)
+	return "", fmt.Errorf("Minecraft %s 向けのForgeビルドが見つかりませんでした(-recommended, -latestとも確認済み)", mcVersion)
 }
 
 func fetch() (*promotions, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(promotionsURL)
 	if err != nil {
-		return nil, fmt.Errorf("fetching Forge promotions: %w", err)
+		return nil, fmt.Errorf("Forgeバージョン情報の取得に失敗しました: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetching Forge promotions: HTTP %s", resp.Status)
+		return nil, fmt.Errorf("Forgeバージョン情報の取得に失敗しました: HTTP %s", resp.Status)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading Forge promotions: %w", err)
+		return nil, fmt.Errorf("Forgeバージョン情報の読み取りに失敗しました: %w", err)
 	}
 	var p promotions
 	if err := json.Unmarshal(body, &p); err != nil {
-		return nil, fmt.Errorf("parsing Forge promotions: %w", err)
+		return nil, fmt.Errorf("Forgeバージョン情報の解析に失敗しました: %w", err)
 	}
 	return &p, nil
 }

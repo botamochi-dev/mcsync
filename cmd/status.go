@@ -8,13 +8,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"mcsync/internal/dockerutil"
 	"mcsync/internal/gitutil"
+	"mcsync/internal/manifest"
+	"mcsync/internal/serverproc"
 )
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show server state, save history, and repo health at a glance",
+	Short: "サーバーの状態・保存履歴・リポジトリの状況を一目で確認する",
 	RunE:  runStatus,
 }
 
@@ -25,94 +26,92 @@ func init() {
 func runStatus(c *cobra.Command, args []string) error {
 	dir := "."
 
-	fmt.Println("Server:")
+	fmt.Println("サーバー:")
 	printServerStatus(dir)
 
 	fmt.Println("\nGit:")
 	if !gitutil.IsInstalled() || !gitutil.IsRepo(dir) {
-		fmt.Println("  not a git repo (run `mcsync init` first)")
+		fmt.Println("  gitリポジトリではありません(先に `mcsync init` を実行してください)")
 	} else {
 		printGitStatus(dir)
 		printLockStatus(dir)
 	}
 
-	fmt.Println("\nDisk usage:")
+	fmt.Println("\nディスク使用量:")
 	printSize("  data/world", dirSize(filepath.Join(dir, "data", "world")))
 	gitSize := dirSize(filepath.Join(dir, ".git"))
 	lfsSize := dirSize(filepath.Join(dir, ".git", "lfs", "objects"))
 	printSize("  .git", gitSize)
 	if lfsSize > 0 {
-		printSize("    of which LFS cache", lfsSize)
+		printSize("    うちLFSキャッシュ", lfsSize)
 	}
 
 	return nil
 }
 
 func printServerStatus(dir string) {
-	if !dockerutil.DaemonRunning() {
-		fmt.Println("  Docker daemon isn't running")
+	running, pid := serverproc.IsRunning(mustAbs(dir))
+	if !running {
+		fmt.Println("  起動していません")
 		return
 	}
-	state, health, err := dockerutil.ServiceStatus(dir, "mc")
-	if err != nil {
-		fmt.Println("  not running")
-		return
+	fmt.Printf("  起動中 (pid %d)", pid)
+	if javaPID, ok := serverproc.JavaPID(mustAbs(dir)); ok {
+		if mem, ok := serverproc.MemoryUsage(javaPID); ok {
+			fmt.Printf(", メモリ %s", formatSize(mem))
+		}
 	}
-	if health != "" {
-		fmt.Printf("  %s (%s)\n", state, health)
-	} else {
-		fmt.Printf("  %s\n", state)
-	}
+	fmt.Println()
 }
 
 func printGitStatus(dir string) {
 	hash, date, subject, err := gitutil.CommitInfo(dir, "HEAD")
 	if err == nil {
-		fmt.Printf("  Last save: %s  %s  (%s)\n", date, subject, hash)
+		fmt.Printf("  最終保存: %s  %s  (%s)\n", date, subject, hash)
 	}
 
 	// Scoped to the paths mcsync actually manages, so a stray unrelated
 	// file sitting in the project folder doesn't get reported as an
 	// "uncommitted change" to the server's saved state.
-	relevantPaths := append([]string{"docker-compose.yml", ".gitignore", ".gitattributes"}, trackedStatePaths...)
+	relevantPaths := append([]string{manifest.FileName, ".gitignore", ".gitattributes"}, trackedStatePaths...)
 	dirty, err := gitutil.HasChanges(dir, relevantPaths...)
 	if err == nil && dirty {
-		fmt.Println("  Uncommitted changes present (run `mcsync stop` or `mcsync mods add` to save them)")
+		fmt.Println("  未commitの変更があります(`mcsync stop` を実行して保存してください)")
 	}
 
 	if !gitutil.HasRemote(dir, "origin") {
-		fmt.Println("  no remote configured")
+		fmt.Println("  リモート未設定")
 		return
 	}
 	ahead, behind, err := gitutil.AheadBehind(dir)
 	if err != nil {
-		fmt.Println("  remote configured, but couldn't compare against it (no upstream tracking branch?)")
+		fmt.Println("  リモートは設定されていますが比較できません(upstreamブランチが未設定?)")
 		return
 	}
 	switch {
 	case ahead > 0 && behind > 0:
-		fmt.Printf("  %d commit(s) ahead, %d behind origin -- push and pull needed\n", ahead, behind)
+		fmt.Printf("  origin より %d commit進んでいて %d commit遅れています -- push・pullが必要です\n", ahead, behind)
 	case ahead > 0:
-		fmt.Printf("  %d commit(s) not yet pushed\n", ahead)
+		fmt.Printf("  未pushのcommitが %d 件あります\n", ahead)
 	case behind > 0:
-		fmt.Printf("  %d commit(s) behind origin -- run `mcsync start` to pull\n", behind)
+		fmt.Printf("  originより %d commit遅れています -- `mcsync start` でpullしてください\n", behind)
 	default:
-		fmt.Println("  up to date with origin")
+		fmt.Println("  originと同期済みです")
 	}
 }
 
 func printLockStatus(dir string) {
 	info, err := readLock(dir)
 	if err != nil || info == nil {
-		fmt.Println("  Lock: none (no PC currently marked as running this server)")
+		fmt.Println("  ロック: なし(このサーバーを起動中のPCはありません)")
 		return
 	}
 	host, _ := os.Hostname()
 	who := info.Host
 	if info.Host == host {
-		who += " (this PC)"
+		who += " (このPC)"
 	}
-	fmt.Printf("  Lock: held by %s%s since %s\n", who, userSuffix(info.User), info.StartedAt.Format("2006-01-02 15:04"))
+	fmt.Printf("  ロック: %s%s が %s から保持中\n", who, userSuffix(info.User), info.StartedAt.Format("2006-01-02 15:04"))
 }
 
 func dirSize(path string) int64 {

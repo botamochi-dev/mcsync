@@ -37,7 +37,7 @@ func readLock(dir string) (*lockInfo, error) {
 	}
 	var info lockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", lockFileName, err)
+		return nil, fmt.Errorf("%s の解析に失敗しました: %w", lockFileName, err)
 	}
 	return &info, nil
 }
@@ -52,17 +52,17 @@ func checkLock(dir string, force bool) error {
 	}
 	host, _ := os.Hostname()
 	if info.Host == host {
-		fmt.Printf("Note: found a leftover lock from this PC (started %s) -- probably an unclean shutdown last time. Continuing.\n",
+		fmt.Printf("注記: このPC自身が残したロックが見つかりました(開始 %s) -- 前回異常終了した可能性があります。続行します。\n",
 			info.StartedAt.Format("2006-01-02 15:04"))
 		return nil
 	}
 	if !force {
-		return fmt.Errorf("another PC (%s%s) may still be running this server, started %s.\n"+
-			"Starting anyway risks overwriting their progress when they save.\n"+
-			"Make sure it's really stopped there, then retry with --force to override",
+		return fmt.Errorf("別のPC(%s%s)がこのサーバーを起動中かもしれません(開始 %s)。\n"+
+			"このまま起動すると、相手が保存した際に上書きしてしまう恐れがあります。\n"+
+			"本当に停止済みであることを確認した上で、--force を付けて再実行してください",
 			info.Host, userSuffix(info.User), info.StartedAt.Format("2006-01-02 15:04"))
 	}
-	fmt.Printf("Warning: overriding lock held by %s (--force)\n", info.Host)
+	fmt.Printf("警告: %s が保持するロックを無視して起動します(--force)\n", info.Host)
 	return nil
 }
 
@@ -110,7 +110,7 @@ func removeLockAndStage(dir string) ([]string, error) {
 	}
 	host, _ := os.Hostname()
 	if info.Host != host {
-		fmt.Printf("Note: lock is held by a different PC (%s); leaving it in place.\n", info.Host)
+		fmt.Printf("注記: ロックは別のPC(%s)が保持しているため、そのままにします。\n", info.Host)
 		return nil, nil
 	}
 	if err := os.Remove(lockPath(dir)); err != nil && !os.IsNotExist(err) {

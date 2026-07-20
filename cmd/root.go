@@ -1,8 +1,8 @@
-// Package cmd implements the mcsync CLI. mcsync is a thin wrapper around
-// git and docker compose: docker-compose.yml is the manifest (MC/Forge
-// version, mod list), itzg/docker-minecraft-server handles the Forge
-// install/EULA/mod download, and mcsync only saves users from typing the
-// same git+docker commands every time.
+// Package cmd implements the mcsync CLI. mcsync runs a self-hosted Forge
+// Minecraft server directly on the host (no Docker): mcsync.yml is the
+// manifest (MC/Forge version, memory), and mcsync itself downloads/caches
+// Java and Forge, manages the server process, and wraps the git commands
+// needed to sync world/config across PCs.
 package cmd
 
 import (
@@ -14,13 +14,12 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "mcsync",
-	Short: "Sync a Forge Minecraft server (world + config) across PCs via git + docker compose",
-	Long: `mcsync wraps git and docker compose so a self-hosted Forge Minecraft
-server's world/config can be synced across multiple PCs.
+	Short: "自宅Forge Minecraftサーバー(world + config)を複数PC間でgit同期する",
+	Long: `mcsyncは、自宅Forge Minecraftサーバーをホスト上で直接実行し
+(JavaとForgeはmcsync自身がダウンロード・管理するのでDockerは不要です)、
+world/configを複数PC間で同期するためのgitコマンドをまとめて実行します。
 
-docker-compose.yml is the manifest: it declares the Minecraft/Forge version
-and mod list. mcsync never downloads Forge or mods itself -- that's handled
-by the itzg/minecraft-server image on container start.`,
+mcsync.ymlがマニフェストで、Minecraft/Forgeのバージョンとメモリ量を記述します。`,
 	SilenceUsage: true,
 }
 
@@ -28,7 +27,7 @@ by the itzg/minecraft-server image on container start.`,
 // set a non-zero exit code.
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		fmt.Fprintln(os.Stderr, "エラー:", err)
 		return err
 	}
 	return nil

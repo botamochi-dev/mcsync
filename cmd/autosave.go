@@ -15,26 +15,27 @@ var autosaveInterval time.Duration
 
 var autosaveCmd = &cobra.Command{
 	Use:   "autosave",
-	Short: "Periodically save (commit/push) world/config/mods while the server keeps running",
-	Long: `Periodically save (commit/push) world/config/mods while the server keeps
-running -- unlike "mcsync stop", this does not take the server down.
+	Short: "サーバーを起動したまま定期的にworld/config/modsを保存(commit/push)する",
+	Long: `サーバーを起動したまま定期的にworld/config/modsを保存(commit/push)します。
+「mcsync stop」と違い、サーバーは停止しません。
 
-Runs in the foreground until interrupted (Ctrl+C). Before each save, it
-best-effort runs "save-all" over RCON so the snapshot isn't taken mid-write.`,
+Ctrl+Cで中断するまでフォアグラウンドで動き続けます。保存の直前にベストエフォートで
+"save-all"をサーバーのコンソールに送るので、書き込み中の中途半端な状態のまま
+保存してしまう可能性を減らしています。`,
 	RunE: runAutosave,
 }
 
 func init() {
-	autosaveCmd.Flags().DurationVar(&autosaveInterval, "interval", 15*time.Minute, "how often to save")
+	autosaveCmd.Flags().DurationVar(&autosaveInterval, "interval", 15*time.Minute, "保存の間隔")
 	rootCmd.AddCommand(autosaveCmd)
 }
 
 func runAutosave(c *cobra.Command, args []string) error {
 	dir := "."
 	if !gitutil.IsInstalled() || !gitutil.IsRepo(dir) {
-		return fmt.Errorf("not a git repo; run `mcsync init` first")
+		return fmt.Errorf("gitリポジトリではありません。先に `mcsync init` を実行してください")
 	}
-	fmt.Printf("Autosaving every %s. This does not stop the server -- press Ctrl+C to stop autosaving.\n", autosaveInterval)
+	fmt.Printf("%s おきに自動保存します。サーバーは停止しません -- 中断するには Ctrl+C を押してください。\n", autosaveInterval)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
@@ -44,12 +45,12 @@ func runAutosave(c *cobra.Command, args []string) error {
 	for {
 		select {
 		case <-sigCh:
-			fmt.Println("\nStopped autosaving (server keeps running).")
+			fmt.Println("\n自動保存を停止しました(サーバーは起動したままです)。")
 			return nil
 		case <-ticker.C:
-			fmt.Printf("\n[%s] Autosaving...\n", time.Now().Format("15:04:05"))
+			fmt.Printf("\n[%s] 自動保存しています...\n", time.Now().Format("15:04:05"))
 			if err := saveTrackedState(dir, true); err != nil {
-				fmt.Printf("Autosave failed: %v\n", err)
+				fmt.Printf("自動保存に失敗しました: %v\n", err)
 			}
 		}
 	}
