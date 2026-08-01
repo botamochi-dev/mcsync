@@ -78,7 +78,7 @@ clone→Java/Forgeの用意→起動→起動完了待ちまで自動で行わ�
 
 ## その他のよく使うコマンド
 
-- **mod追加**: `data/mods`フォルダに自分でダウンロードしたjarを置くだけです。`mcsync stop`時に自動でcommit・pushされます(Modrinth/CurseForgeからの自動ダウンロード機能はありません)。
+- **mod追加**: `data/mods`フォルダに自分でダウンロードしたjarを置くだけです。`mcsync stop`時に自動でcommit・pushされます(Modrinth/CurseForgeからの自動ダウンロード機能はありません)。動作確認のために再起動を繰り返したいだけなら`mcsync restart`(gitのpull/commit/pushを行わずサーバーだけ再起動)が便利です。
 - **`mcsync status`**: サーバーの起動状態・メモリ使用量、gitの同期状態、ディスク使用量を一目で確認できます。困ったときはまずこれ。
 - **`mcsync restore [commit]`**: ワールドを過去のsave状態に戻します。引数なしで直近のsave履歴を一覧表示、commitハッシュを指定すると復元(確認プロンプトあり、`-y`で省略可)。
 - **`mcsync autosave`**: サーバーを止めずに定期的にセーブ・pushします(デフォルト15分おき、`--interval`で変更、Ctrl+Cで停止)。
@@ -92,6 +92,7 @@ clone→Java/Forgeの用意→起動→起動完了待ちまで自動で行わ�
 | `mcsync setup <git-url> [フォルダ名]` | 既存プロジェクトをclone・起動 |
 | `mcsync start [--no-wait] [--force]` | git pull後にサーバー起動 |
 | `mcsync stop` | サーバー停止・保存・push |
+| `mcsync restart [--no-wait]` | git操作なしでサーバーだけ再起動(mod動作確認向け) |
 | `mcsync status` | 状態確認 |
 | `mcsync restore [commit] [-y]` | ワールドを過去の状態に復元 |
 | `mcsync autosave [--interval 5m]` | 止めずに定期セーブ |
